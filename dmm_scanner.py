@@ -22,7 +22,7 @@ if os.name == "nt":
 BASE_URL = "https://prices.runescape.wiki/api/v1/dmm"
 HEADERS = {"User-Agent": "dmm-scanner - wash trade detector"}
 
-POLL_INTERVAL = 30  # seconds (API data updates slowly, no need to hammer it)
+POLL_INTERVAL = 5  # seconds (fast wash trade detection)
 MAX_ALERTS = 500  # cap stored alerts to prevent memory growth
 VOLUME_THRESHOLD = 500  # max 24h total volume
 RATIO_THRESHOLD = 1_000  # min price / alch ratio
@@ -106,7 +106,7 @@ NPC_SHOP_ITEMS = {
 # Wash trade exclusions – legitimate rare gear (not wash trade vehicles)
 # ---------------------------------------------------------------------------
 
-WASH_TRADE_EXCLUSIONS = {
+WASH_TRADE_EXCLUSIONS = {s.lower() for s in {
     # Rare weapons
     "The Dogsword", "Thunder Khopesh", "Soulreaper axe", "Tumeken's shadow",
     "Scythe of vitur", "Twisted bow", "Zaryte crossbow", "Osmumten's fang",
@@ -137,7 +137,7 @@ WASH_TRADE_EXCLUSIONS = {
     "Torva full helm", "Torva platebody", "Torva platelegs",
     # Inquisitor
     "Inquisitor's great helm", "Inquisitor's hauberk", "Inquisitor's plateskirt",
-}
+}}
 
 # ---------------------------------------------------------------------------
 # NPC shop wiki URLs – maps item name → wiki shop page path
@@ -310,6 +310,34 @@ BOLD = "\033[1m"
 DIM = "\033[90m"
 RESET = "\033[0m"
 SEPARATOR = DIM + "=" * 72 + RESET
+
+
+# ---------------------------------------------------------------------------
+# Windows Desktop Notifications
+# ---------------------------------------------------------------------------
+
+def send_wash_trade_notification(name, price, ratio):
+    """Send Windows desktop notification for wash trade alert."""
+    try:
+        from winotify import Notification, audio
+        toast = Notification(
+            app_id="DMM Scanner",
+            title="Wash Trade Detected!",
+            msg=f"{name}\n{price:,} gp | {ratio:,.0f}x ratio",
+            duration="short"
+        )
+        toast.set_audio(audio.Default, loop=False)
+        toast.show()
+    except ImportError:
+        # Fallback to system beep if winotify not installed
+        try:
+            import winsound
+            winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except:
+            pass
+    except Exception:
+        pass  # Don't crash scanner if notification fails
+
 
 # ---------------------------------------------------------------------------
 # Embedded HTML dashboard
@@ -888,6 +916,13 @@ function shopCell(npcValue, shopUrl, innerOnly) {
   return '<td>' + fmtGpFull(npcValue) + '</td>';
 }
 
+function priceCell(price, itemId, cssClass) {
+  // Link to DMM Wiki live price graph
+  const url = 'https://prices.runescape.wiki/dmm/item/' + itemId;
+  const cls = cssClass ? ' class="' + cssClass + '"' : '';
+  return '<td data-val="' + price + '"' + cls + '><a class="item-link" href="' + url + '" target="_blank">' + fmtGpFull(price) + '</a></td>';
+}
+
 function fmtTradeTime(unixTs) {
   if (!unixTs) return '--';
   const d = new Date(unixTs * 1000);
@@ -969,7 +1004,7 @@ function renderWash(data) {
       + favCell(a.item_id)
       + '<td data-val="' + a.time + '">' + esc(fmtTime(a.time)) + '</td>'
       + '<td data-val="' + esc(a.name) + '">' + nameCell(a.name, true) + '</td>'
-      + '<td data-val="' + a.price + '" class="price">' + fmtGpFull(a.price) + '</td>'
+      + priceCell(a.price, a.item_id, 'price')
       + '<td data-val="' + a.highalch + '">' + fmtGpFull(a.highalch) + '</td>'
       + '<td data-val="' + a.ratio + '" class="ratio">' + Number(a.ratio).toLocaleString() + 'x</td>'
       + '<td data-val="' + a.volume + '">' + a.volume + '</td>'
@@ -1013,7 +1048,7 @@ function renderMoney(data) {
       + favCell(o.item_id)
       + '<td data-val="' + esc(o.name) + '">' + nameCell(o.name, true) + '</td>'
       + '<td data-val="' + o.npc_value + '">' + shopCell(o.npc_value, o.shop_url, true) + '</td>'
-      + '<td data-val="' + o.ge_price + '" class="price">' + fmtGpFull(o.ge_price) + '</td>'
+      + priceCell(o.ge_price, o.item_id, 'price')
       + '<td data-val="' + o.markup + '" class="ratio">' + o.markup.toLocaleString() + 'x</td>'
       + '<td data-val="' + o.volume + '" class="' + vc + '">' + o.volume.toLocaleString() + '</td>'
       + '<td data-val="' + o.profit_per + '" class="price">' + fmtGp(o.profit_per) + '</td>'
@@ -1071,7 +1106,7 @@ function renderArbitrage(data) {
       alchHtml += '<tr class="' + rowCls + '" data-item-id="' + a.item_id + '">'
         + favCell(a.item_id)
         + '<td data-val="' + esc(a.name) + '">' + nameCell(a.name, true) + '</td>'
-        + '<td data-val="' + a.buy_price + '" class="price">' + fmtGpFull(a.buy_price) + '</td>'
+        + priceCell(a.buy_price, a.item_id, 'price')
         + '<td data-val="' + a.alch_value + '" class="gold">' + fmtGpFull(a.alch_value) + '</td>'
         + '<td data-val="' + a.profit + '" class="green">' + fmtGp(a.profit) + '</td>'
         + '<td data-val="' + a.volume + '" class="' + vc + '">' + a.volume.toLocaleString() + '</td>'
@@ -1110,8 +1145,9 @@ function renderArbitrage(data) {
       flipHtml += '<tr class="' + rowCls + '" data-item-id="' + s.item_id + '">'
         + favCell(s.item_id)
         + '<td data-val="' + esc(s.name) + '">' + nameCell(s.name, true) + '</td>'
-        + '<td data-val="' + s.buy_price + '" class="price">' + fmtGpFull(s.buy_price) + '</td>'
-        + '<td data-val="' + s.sell_price + '" class="price">' + fmtGpFull(s.sell_price) + '</td>'
+        + priceCell(s.buy_price, s.item_id, 'price')
+        + priceCell(s.sell_price, s.item_id, 'price')
+        + '<td data-val="' + s.spread_pct + '" class="green">' + s.spread_pct + '%</td>'
         + '<td data-val="' + s.spread_pct + '" class="green">' + s.spread_pct + '%</td>'
         + '<td data-val="' + s.volume + '" class="' + vc + '">' + s.volume.toLocaleString() + '</td>'
         + '<td data-val="' + s.flip_score + '" class="gold">' + fmtGp(s.flip_score) + '</td>'
@@ -1302,6 +1338,7 @@ class AlertStore:
         self._paused = False
         self._alch_opps = []     # high alch arbitrage opportunities
         self._spread_opps = []   # bid-ask spread opportunities
+        self._exclusion_ids = set()  # item IDs to exclude from wash trades
 
     def add_alert(self, alert_dict, dedup_key):
         """Time-windowed dedup: same (item_id, price) within DEDUP_WINDOW = skip."""
@@ -1362,8 +1399,13 @@ class AlertStore:
             repeat_items = sum(
                 1 for h in self._item_history.values() if len(h) >= 2
             )
+            # Filter out excluded items from alerts sent to dashboard
+            filtered_alerts = [
+                a for a in self._alerts
+                if a.get("item_id") not in self._exclusion_ids
+            ]
             return {
-                "alerts": list(self._alerts),
+                "alerts": filtered_alerts,
                 "opportunities": list(self._opportunities),
                 "alch_opps": list(self._alch_opps),
                 "spread_opps": list(self._spread_opps),
@@ -1423,11 +1465,11 @@ def check_latest(mapping, safe_list, volumes, store):
             continue
 
         # Skip excluded items (legitimate rare gear)
-        name = item.get("name", f"Item #{item_id}")
-        if name in WASH_TRADE_EXCLUSIONS:
+        if item_id in store._exclusion_ids:
             continue
 
         # Deduplicate
+        name = item.get("name", f"Item #{item_id}")
         dedup_key = (item_id, high_price)
         high_time = entry.get("highTime")  # unix timestamp of actual trade
         alert = {
@@ -1444,6 +1486,12 @@ def check_latest(mapping, safe_list, volumes, store):
 
         if not store.add_alert(alert, dedup_key):
             continue
+
+        # Windows desktop notification (only for fresh trades - within 60 seconds)
+        if store._poll_count >= 1 and high_time:
+            trade_age = int(time.time()) - high_time
+            if trade_age <= 60:
+                send_wash_trade_notification(name, high_price, ratio)
 
         # Console output
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1708,7 +1756,15 @@ def main():
         print("WARNING: No low-volume items found. Nothing to monitor.")
         return
 
+    # Build ID-based exclusion set from name list
+    wash_exclusion_ids = set()
+    for item_id, item in mapping.items():
+        if item.get("name", "").lower() in WASH_TRADE_EXCLUSIONS:
+            wash_exclusion_ids.add(item_id)
+    print(f"Excluding {len(wash_exclusion_ids)} items from wash trade detection.")
+
     store = AlertStore()
+    store._exclusion_ids = wash_exclusion_ids
 
     # Start scanner in background
     scanner_thread = threading.Thread(
